@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spectrum Visualizer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #121212; color: #fff;
+    font-family: -apple-system, "Helvetica Neue", sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 2rem;
+  }
+  #app { width: min(720px, 100%); }
+  #now-playing {
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 2rem; padding: 16px;
+    background: #1a1a1a; border-radius: 12px;
+  }
+  #album-art {
+    width: 56px; height: 56px; border-radius: 6px;
+    background: #282828; display: flex; align-items: center;
+    justify-content: center; flex-shrink: 0; overflow: hidden;
+  }
+  #album-art img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  #track-info { flex: 1; min-width: 0; }
+  #track-name { font-size: 15px; font-weight: 600; color: #535353; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #artist-name { font-size: 13px; color: #535353; margin-top: 3px; }
+  #connect-spotify {
+    font-size: 12px; color: #1db954; cursor: pointer;
+    background: transparent; border: 1px solid #1db954;
+    padding: 6px 14px; border-radius: 20px; white-space: nowrap; transition: all 0.15s;
+  }
+  #connect-spotify:hover { background: #1db954; color: #000; }
+  #canvas-wrap { width: 100%; height: 340px; }
+  canvas { width: 100%; height: 100%; display: block; }
+  #freq-labels { display: flex; justify-content: space-between; padding: 4px 2px 0; }
+  #freq-labels span { font-size: 11px; color: #535353; }
+  #controls { display: flex; align-items: center; gap: 12px; margin-top: 1.5rem; flex-wrap: wrap; }
+  select {
+    background: #282828; color: #b3b3b3; border: 1px solid #333;
+    padding: 8px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; flex: 1;
+  }
+  #start-btn {
+    background: #1db954; color: #000; border: none;
+    padding: 10px 24px; border-radius: 24px; font-size: 13px;
+    font-weight: 700; cursor: pointer; transition: all 0.15s;
+  }
+  #start-btn:hover { background: #1ed760; }
+  #start-btn.active { background: #fff; }
+  .ctrl { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #535353; }
+  input[type=range] { width: 80px; accent-color: #1db954; cursor: pointer; }
+  #status { font-size: 12px; color: #535353; margin-top: 1rem; text-align: center; }
+  #spotify-modal {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); align-items: center; justify-content: center; z-index: 100;
+  }
+  #spotify-modal.open { display: flex; }
+  #modal-box { background: #282828; border-radius: 12px; padding: 2rem; width: min(400px, 90vw); }
+  #modal-box h2 { font-size: 18px; margin-bottom: 0.5rem; }
+  #modal-box p { font-size: 13px; color: #b3b3b3; margin-bottom: 1.5rem; line-height: 1.6; }
+  #modal-box input {
+    width: 100%; background: #333; border: 1px solid #444; color: #fff;
+    padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 0.75rem;
+  }
+  #modal-box input:focus { outline: none; border-color: #1db954; }
+  #modal-box input::placeholder { color: #535353; }
+  .modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 1rem; }
+  .modal-btns button { padding: 8px 20px; border-radius: 20px; font-size: 13px; cursor: pointer; border: none; }
+  #modal-cancel { background: transparent; color: #b3b3b3; border: 1px solid #535353; }
+  #modal-ok { background: #1db954; color: #000; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="now-playing">
+    <div id="album-art">
+      <img id="album-img" src="" alt="">
+      <svg id="album-placeholder" width="24" height="24" viewBox="0 0 24 24" fill="none">
+        <rect x="3" y="3" width="18" height="18" rx="2" fill="#333"/>
+        <path d="M9 8l8 4-8 4V8z" fill="#535353"/>
+      </svg>
+    </div>
+    <div id="track-info">
+      <div id="track-name">-</div>
+      <div id="artist-name">Spotifyと連携すると表示されます</div>
+    </div>
+    <button id="connect-spotify">Spotifyと連携</button>
+  </div>
+
+  <div id="canvas-wrap"><canvas id="viz"></canvas></div>
+  <div id="freq-labels">
+    <span>10Hz</span><span>100Hz</span><span>500Hz</span><span>1kHz</span><span>5kHz</span><span>20kHz</span>
+  </div>
+
+  <div id="controls">
+    <select id="device-select"><option value="__default__">入力デバイス（許可後に読み込み）</option></select>
+    <button id="start-btn">開始</button>
+    <div class="ctrl">感度 <input type="range" id="gain" min="0.2" max="3" step="0.05" value="0.8"></div>
+    <div class="ctrl">バー数 <input type="range" id="barcount" min="16" max="128" step="8" value="64"></div>
+  </div>
+  <p id="status">「開始」を押してマイクを許可してください</p>
+</div>
+
+<div id="spotify-modal">
+  <div id="modal-box">
+    <h2>Spotifyと連携</h2>
+    <p>Spotify DashboardのClient IDを入力してください。<br>
+    Redirect URIに <code style="color:#1db954;font-size:12px">https://neochiba.github.io/auDio-SPeCTRuM/</code> を追加してください。</p>
+    <input id="client-id-input" type="text" placeholder="Client ID を貼り付け">
+    <div class="modal-btns">
+      <button id="modal-cancel">キャンセル</button>
+      <button id="modal-ok">認証する</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('viz');
+  const ctx = canvas.getContext('2d');
+  const btn = document.getElementById('start-btn');
+  const status = document.getElementById('status');
+  const gainSlider = document.getElementById('gain');
+  const barSlider = document.getElementById('barcount');
+  const sel = document.getElementById('device-select');
+
+  let analyser, animId, running = false;
+
+  function resize() {
+    canvas.width = canvas.parentElement.offsetWidth;
+    canvas.height = canvas.parentElement.offsetHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  async function loadDevices() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices.filter(d => d.kind === 'audioinput');
+      sel.innerHTML = '';
+      if (inputs.length === 0) { sel.innerHTML = '<option value="__default__">デバイスなし</option>'; return; }
+      let bhIdx = -1;
+      inputs.forEach((d, i) => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId || '__default__';
+        opt.textContent = d.label || ('入力デバイス ' + (i + 1));
+        if (d.label && d.label.toLowerCase().includes('blackhole')) bhIdx = i;
+        sel.appendChild(opt);
+      });
+      if (bhIdx >= 0) sel.selectedIndex = bhIdx;
+      else sel.selectedIndex = 0;
+    } catch(e) { console.error(e); }
+  }
+
+  // カプセル形（完全に丸い両端）を描く
+  function capsule(x, centerY, w, h) {
+    if (h < 2) return;
+    const r = w / 2; // 横幅の半分を半径に = 完全な半円
+    const halfH = h / 2;
+    const top = centerY - halfH;
+    const bot = centerY + halfH;
+    ctx.beginPath();
+    // 上の半円
+    ctx.arc(x + r, top + r, r, Math.PI, 0);
+    // 右辺
+    ctx.lineTo(x + w, bot - r);
+    // 下の半円
+    ctx.arc(x + r, bot - r, r, 0, Math.PI);
+    // 左辺
+    ctx.lineTo(x, top + r);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function draw() {
+    animId = requestAnimationFrame(draw);
+    const barCount = parseInt(barSlider.value);
+    analyser.fftSize = Math.max(512, barCount * 8);
+    const bufLen = analyser.frequencyBinCount;
+    const data = new Uint8Array(bufLen);
+    analyser.getByteFrequencyData(data);
+
+    const W = canvas.width, H = canvas.height;
+    const midY = H / 2;
+    ctx.clearRect(0, 0, W, H);
+
+    const gain = parseFloat(gainSlider.value);
+    const gap = 3;
+    const barW = Math.max(3, (W - gap * (barCount - 1)) / barCount);
+    const sampleRate = analyser.context.sampleRate;
+    const freqPerBin = sampleRate / analyser.fftSize;
+    const minFreq = 10, maxFreq = 20000;
+
+    ctx.fillStyle = 'rgba(29,185,84,0.85)';
+
+    for (let i = 0; i < barCount; i++) {
+      const freq = minFreq * Math.pow(maxFreq / minFreq, i / (barCount - 1));
+      const binIdx = Math.min(bufLen - 1, Math.round(freq / freqPerBin));
+      const amp = Math.min(1, (data[binIdx] / 255) * gain);
+      // 最小の高さをbarWに（幅と同じ＝最小でも丸い点になる）
+      const barH = Math.max(barW, amp * H);
+      const x = i * (barW + gap);
+      capsule(x, midY, barW, barH);
+    }
+  }
+
+  async function start() {
+    try {
+      const deviceId = sel.value;
+      const constraints = (!deviceId || deviceId === '__default__')
+        ? { audio: true, video: false }
+        : { audio: { deviceId: { exact: deviceId } }, video: false };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      await loadDevices();
+      const ac = new AudioContext();
+      const source = ac.createMediaStreamSource(stream);
+      analyser = ac.createAnalyser();
+      analyser.smoothingTimeConstant = 0.82;
+      source.connect(analyser);
+      running = true;
+      btn.textContent = '停止';
+      btn.classList.add('active');
+      const label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : 'デバイス';
+      status.textContent = label + ' から受信中...';
+      draw();
+    } catch(e) {
+      status.textContent = 'エラー: ' + e.message;
+    }
+  }
+
+  function stop() {
+    cancelAnimationFrame(animId);
+    running = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    btn.textContent = '開始';
+    btn.classList.remove('active');
+    status.textContent = '停止しました';
+  }
+
+  btn.addEventListener('click', () => running ? stop() : start());
+  sel.addEventListener('change', async () => { if (running) { stop(); await start(); } });
+  navigator.mediaDevices.enumerateDevices().then(devices => {
+    if (devices.filter(d => d.kind === 'audioinput' && d.label).length > 0) loadDevices();
+  });
+
+  // ---- Spotify PKCE ----
+  async function sha256(plain) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(plain);
+    return crypto.subtle.digest('SHA-256', data);
+  }
+  function base64urlencode(a) {
+    return btoa(String.fromCharCode(...new Uint8Array(a)))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  async function generateCodeChallenge(verifier) {
+    const hashed = await sha256(verifier);
+    return base64urlencode(hashed);
+  }
+  function generateCodeVerifier() {
+    const array = new Uint8Array(64);
+    crypto.getRandomValues(array);
+    return base64urlencode(array);
+  }
+
+  const modal = document.getElementById('spotify-modal');
+  document.getElementById('connect-spotify').addEventListener('click', () => {
+    const saved = localStorage.getItem('spotify_client_id');
+    if (saved) document.getElementById('client-id-input').value = saved;
+    modal.classList.add('open');
+  });
+  document.getElementById('modal-cancel').addEventListener('click', () => modal.classList.remove('open'));
+  modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('open'); });
+
+  document.getElementById('modal-ok').addEventListener('click', async () => {
+    const clientId = document.getElementById('client-id-input').value.trim();
+    if (!clientId) return;
+    localStorage.setItem('spotify_client_id', clientId);
+    modal.classList.remove('open');
+
+    const verifier = generateCodeVerifier();
+    const challenge = await generateCodeChallenge(verifier);
+    localStorage.setItem('spotify_verifier', verifier);
+
+    const redirectUri = location.href.split('?')[0].split('#')[0];
+    const params = new URLSearchParams({
+      client_id: clientId,
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      scope: 'user-read-currently-playing user-read-playback-state',
+      code_challenge_method: 'S256',
+      code_challenge: challenge,
+    });
+    location.href = 'https://accounts.spotify.com/authorize?' + params;
+  });
+
+  async function exchangeToken(code) {
+    const clientId = localStorage.getItem('spotify_client_id');
+    const verifier = localStorage.getItem('spotify_verifier');
+    const redirectUri = location.href.split('?')[0].split('#')[0];
+    const res = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: verifier,
+      }),
+    });
+    return res.json();
+  }
+
+  async function refreshToken(refresh) {
+    const clientId = localStorage.getItem('spotify_client_id');
+    const res = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        grant_type: 'refresh_token',
+        refresh_token: refresh,
+      }),
+    });
+    return res.json();
+  }
+
+  async function fetchNowPlaying(token) {
+    try {
+      const res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+        headers: { Authorization: 'Bearer ' + token }
+      });
+      if (res.status === 204) return null;
+      if (res.status === 401) return 'expired';
+      return await res.json();
+    } catch { return null; }
+  }
+
+  function updateTrackUI(data) {
+    if (!data || !data.item) return;
+    const t = data.item;
+    document.getElementById('track-name').textContent = t.name;
+    document.getElementById('track-name').style.color = '#fff';
+    document.getElementById('artist-name').textContent = t.artists.map(a => a.name).join(', ');
+    document.getElementById('artist-name').style.color = '#b3b3b3';
+    const img = document.getElementById('album-img');
+    if (t.album.images[0]) {
+      img.src = t.album.images[0].url;
+      img.style.display = 'block';
+      document.getElementById('album-placeholder').style.display = 'none';
+    }
+    document.getElementById('connect-spotify').textContent = '連携済み';
+  }
+
+  async function startPolling(token, refresh) {
+    let t = token;
+    async function poll() {
+      const data = await fetchNowPlaying(t);
+      if (data === 'expired' && refresh) {
+        const r = await refreshToken(refresh);
+        if (r.access_token) {
+          t = r.access_token;
+          localStorage.setItem('spotify_token', t);
+          if (r.refresh_token) localStorage.setItem('spotify_refresh', r.refresh_token);
+          const d2 = await fetchNowPlaying(t);
+          if (d2 && d2 !== 'expired') updateTrackUI(d2);
+        }
+      } else if (data) {
+        updateTrackUI(data);
+      }
+    }
+    poll();
+    setInterval(poll, 5000);
+  }
+
+  // Handle redirect with code
+  const urlParams = new URLSearchParams(location.search);
+  const code = urlParams.get('code');
+  if (code) {
+    history.replaceState({}, '', location.pathname);
+    exchangeToken(code).then(data => {
+      if (data.access_token) {
+        localStorage.setItem('spotify_token', data.access_token);
+        if (data.refresh_token) localStorage.setItem('spotify_refresh', data.refresh_token);
+        startPolling(data.access_token, data.refresh_token);
+      }
+    });
+  } else {
+    const saved = localStorage.getItem('spotify_token');
+    const savedRefresh = localStorage.getItem('spotify_refresh');
+    if (saved) startPolling(saved, savedRefresh);
+  }
+})();
+</script>
+</body>
+</html>
